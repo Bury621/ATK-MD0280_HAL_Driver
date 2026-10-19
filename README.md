@@ -186,44 +186,110 @@ while (1)
 
 ## API 速查
 
-### 初始化与显示控制
+先记住三句话：
+
+1. **坐标**：原点 `(0,0)` 在左上角，x 向右、y 向下；调用 `LCD_SetDir()` 改方向后，宽高会跟着变。
+2. **颜色**：16 位 RGB565，用现成的 `LCD_RED` / `LCD_WHITE` 这些宏，或者 `LCD_RGB565(r, g, b)` 自己调。
+3. **文字**：`LCD_ShowString(x, y, "abc", 前景色, 背景色, 字号)`——背景色会填满整个字符格，所以它顺便还能擦掉旧字。
+
+### 最小可用代码
 
 ```c
-uint16_t LCD_Init(void);              // 返回 0x9341 / 0x8552，失败返回 0
-void     LCD_InitAs(uint16_t id);     // 读不到 ID 时强制指定控制器
-void     LCD_SetDir(uint8_t dir);     // LCD_DIR_0 / 90 / 180 / 270
-uint8_t  LCD_GetDir(void);
-uint16_t LCD_GetWidth(void);
-uint16_t LCD_GetHeight(void);
-uint16_t LCD_ReadID(void);
-void     LCD_BackLight(uint8_t on);
-void     LCD_DisplayOn(void);
-void     LCD_DisplayOff(void);
-void     LCD_Test(void);              // 彩条 + ID 自检
+LCD_Init();                                        // 返回 0 表示没检测到屏
+LCD_Clear(LCD_BLACK);                              // 清屏
+LCD_ShowString(10, 10, "Hello", LCD_GREEN, LCD_BLACK, 2);
+LCD_Fill(10, 50, 100, 8, LCD_RED);                 // 一条红色进度条
 ```
+
+### 初始化与显示控制
+
+| 函数 | 作用 | 新手注意 |
+| --- | --- | --- |
+| `LCD_Init()` | 初始化屏幕，读 ID、配 FSMC、清屏、开背光 | 必须在时钟和 GPIO 初始化**之后**调用；返回 `0x9341` / `0x8552`，`0` 表示没认出来 |
+| `LCD_InitAs(id)` | 强制按指定控制器初始化 | 读不到 ID 时的兜底，`LCD_InitAs(0x9341)` |
+| `LCD_SetDir(dir)` | 旋转显示：`LCD_DIR_0 / 90 / 180 / 270` | 旋转后宽高互换（90° 时是 320×240），坐标含义也跟着变 |
+| `LCD_GetWidth()` / `LCD_GetHeight()` | 当前方向下的宽高 | 别用写死的 240/320，横屏时会错 |
+| `LCD_BackLight(on)` | 背光开关 | 传 1 开、0 关 |
+| `LCD_DisplayOn()` / `LCD_DisplayOff()` | 显示开关 | 只关显示不清显存，再开会恢复原画面 |
+| `LCD_ReadID()` | 读控制器 ID | 返回 `0x9341`（ILI9341）或 `0x8552`（ST7789V） |
+| `LCD_Test()` | 彩条 + ID 自检 | 新板子第一次点亮先跑它，能显示就说明接线没问题 |
 
 ### 绘图
 
-```c
-void     LCD_Clear(uint16_t color);
-void     LCD_Fill(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color);
-void     LCD_DrawPoint(uint16_t x, uint16_t y, uint16_t color);
-uint16_t LCD_ReadPoint(uint16_t x, uint16_t y);      // 部分面板读 GRAM 不稳定
-void     LCD_DrawLine(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2, uint16_t color);
-void     LCD_DrawRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color);
-void     LCD_DrawCircle(uint16_t x, uint16_t y, uint16_t r, uint16_t color);
-void     LCD_ShowImage(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint16_t *img);
-```
+| 函数 | 作用 |
+| --- | --- |
+| `LCD_Clear(color)` | 整屏填充 |
+| `LCD_Fill(x, y, w, h, color)` | 矩形填充 |
+| `LCD_DrawPoint(x, y, color)` | 画一个点 |
+| `LCD_DrawLine(x1, y1, x2, y2, color)` | 画线段 |
+| `LCD_DrawRect(x, y, w, h, color)` | 空心矩形 |
+| `LCD_DrawCircle(x, y, r, color)` | 空心圆 |
+| `LCD_ShowImage(x, y, w, h, img)` | 显示 RGB565 图片（16 位/像素，高位在前） |
+| `LCD_ReadPoint(x, y)` | 读一个点的颜色（**这批面板读 GRAM 不稳定，仅供参考**） |
+
+> ⚠️ `LCD_Fill` / `LCD_DrawRect` 的 `w`、`h` 是**宽和高**，不是结束坐标。想画从 (10,10) 到 (110,60) 的矩形，要写 `LCD_Fill(10, 10, 101, 51, color)`。
 
 ### 文字
 
+| 函数 | 说明 |
+| --- | --- |
+| `LCD_ShowChar(x, y, ch, fg, bg, size)` | 显示一个字符 |
+| `LCD_ShowString(x, y, str, fg, bg, size)` | 显示字符串，支持 `\n` 换行，超宽会自动折行 |
+| `LCD_ShowNum(x, y, num, len, fg, bg, size)` | 显示定宽数字，`len` 是位数，不足补 0 |
+
+`size` 是整数放大倍数：
+
+| size | 单个字符占位 |
+| --- | --- |
+| 1 | 8 × 16 |
+| 2 | 16 × 32 |
+| 3 | 24 × 48 |
+
+字号只支持整数倍，没有小数。想让文字居中，先算 `(区域宽度 - 字数 × 8 × size) / 2`。
+
+### 常用套路
+
+**1. 局部刷新数字（不闪屏）**
+
+不要每次 `LCD_Clear`，只清数字那一小块：
+
 ```c
-void LCD_ShowChar  (x, y, ch, fg, bg, size);
-void LCD_ShowString(x, y, "text", fg, bg, size);      // 支持 '\n'
-void LCD_ShowNum   (x, y, value, len, fg, bg, size);  // 定宽，高位补 0
+LCD_Fill(10, 40, 96, 32, LCD_BLACK);                       /* 先擦掉旧数字 */
+LCD_ShowNum(10, 40, value, 5, LCD_WHITE, LCD_BLACK, 2);    /* 再画新的 */
 ```
 
-`size` 是放大倍数：1 → 8×16，2 → 16×32。颜色用 `LCD_RED`、`LCD_WHITE`… 或 `LCD_RGB565(r, g, b)`。
+**2. 画进度条**
+
+```c
+LCD_Fill(10, 200, 220, 12, LCD_DARKGREY);                  /* 底槽 */
+LCD_Fill(10, 200, (uint16_t)(220 * percent / 100), 12, LCD_GREEN);  /* 进度 */
+```
+
+**3. 显示一张图片**
+
+图片用取模软件导出成 RGB565 数组（水平扫描、高位在前、无文件头），然后：
+
+```c
+static const uint16_t logo[64 * 64] = { /* ... */ };
+LCD_ShowImage(88, 120, 64, 64, logo);
+```
+
+**4. 横屏显示**
+
+```c
+LCD_SetDir(LCD_DIR_90);          /* 变成 320x240 */
+LCD_Clear(LCD_WHITE);
+LCD_ShowString(10, 10, "landscape", LCD_BLACK, LCD_WHITE, 2);
+```
+
+### 新手常踩的坑
+
+- `LCD_Init()` 放在 `SystemClock_Config()` / `MX_GPIO_Init()` 之前 → 引脚被 CubeMX 覆盖，白屏。
+- 把 `LCD_Fill(x, y, x2, y2, c)` 当成"对角坐标" → 实际画出来大得离谱。
+- 文字背景色填了白色，但屏幕是黑的 → 每个字后面顶着一块白方块。
+- 以为越界会报错 → 驱动会静默裁剪，画到屏幕外就什么都看不见。
+- 拿 `LCD_ReadPoint()` 的返回值做判断 → 这批面板读回值不稳，别依赖它。
+- 横屏后还用 0° 的坐标算位置 → 图像跑到屏幕外面。
 
 ## 触摸与校准
 
