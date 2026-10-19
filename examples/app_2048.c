@@ -372,29 +372,8 @@ static void animate_slide(void)
         /* ease-out：e = 100 - (100 - u)^2 / 100 */
         e = 100U - (((100U - u) * (100U - u)) / 100U);
 
-        /* 1. 先擦掉所有移动方块上一帧的位置 */
-        for (i = 0; i < g_anim_count; i++)
-        {
-            if ((g_anim[i].fr == g_anim[i].tr) && (g_anim[i].fc == g_anim[i].tc))
-            {
-                continue;               /* 不动的方块不用管 */
-            }
-
-            paint_bg_region(g_anim[i].px, g_anim[i].py, CELL_SIZE, CELL_SIZE);
-        }
-
-        /* 2. 静止的方块原位重画（带数字，防止被擦除误伤） */
-        for (i = 0; i < g_anim_count; i++)
-        {
-            if ((g_anim[i].fr != g_anim[i].tr) || (g_anim[i].fc != g_anim[i].tc))
-            {
-                continue;
-            }
-
-            draw_tile_at(cell_x(g_anim[i].fc), cell_y(g_anim[i].fr), g_anim[i].value);
-        }
-
-        /* 3. 移动的方块画到新位置 */
+        /* 1. 移动的方块：先画新位置，再擦掉落在身后的那一条尾巴。
+         *    顺序不能反 —— 先擦后画会让方块在擦除瞬间“消失”，看起来就是闪。 */
         for (i = 0; i < g_anim_count; i++)
         {
             int32_t x0;
@@ -403,6 +382,8 @@ static void animate_slide(void)
             int32_t y1;
             int32_t x;
             int32_t y;
+            int32_t dx;
+            int32_t dy;
 
             if ((g_anim[i].fr == g_anim[i].tr) && (g_anim[i].fc == g_anim[i].tc))
             {
@@ -418,8 +399,46 @@ static void animate_slide(void)
 
             draw_tile_at((uint16_t)x, (uint16_t)y, g_anim[i].value);
 
+            /* 擦掉旧位置里没有被新位置覆盖的部分 */
+            dx = x - (int32_t)g_anim[i].px;
+            dy = y - (int32_t)g_anim[i].py;
+
+            if (dx > 0)
+            {
+                paint_bg_region(g_anim[i].px, g_anim[i].py, (uint16_t)dx, CELL_SIZE);
+            }
+            else if (dx < 0)
+            {
+                paint_bg_region((uint16_t)(x + CELL_SIZE), g_anim[i].py,
+                                (uint16_t)(-dx), CELL_SIZE);
+            }
+            else if (dy > 0)
+            {
+                paint_bg_region(g_anim[i].px, g_anim[i].py, CELL_SIZE, (uint16_t)dy);
+            }
+            else if (dy < 0)
+            {
+                paint_bg_region(g_anim[i].px, (uint16_t)(y + CELL_SIZE),
+                                CELL_SIZE, (uint16_t)(-dy));
+            }
+            else
+            {
+                /* 位置没变，什么都不用做 */
+            }
+
             g_anim[i].px = (uint16_t)x;
             g_anim[i].py = (uint16_t)y;
+        }
+
+        /* 2. 静止的方块原位重画（尾巴可能擦到相邻格子） */
+        for (i = 0; i < g_anim_count; i++)
+        {
+            if ((g_anim[i].fr != g_anim[i].tr) || (g_anim[i].fc != g_anim[i].tc))
+            {
+                continue;
+            }
+
+            draw_tile_at(cell_x(g_anim[i].fc), cell_y(g_anim[i].fr), g_anim[i].value);
         }
 
         if (u >= 100U)
