@@ -131,13 +131,13 @@ static void draw_header(void)
 {
     LCD_Fill(0, 0, LCD_PANEL_WIDTH, HEADER_H, C_BOARD);
 
-    LCD_ShowString(8, 6, "SCORE", C_TEXT_LIGHT, C_BOARD, 1);
-    LCD_ShowNum(8, 22, g_score, 1, C_TEXT_LIGHT, C_BOARD, 2);
+    LCD_ShowString(8, 0, "SCORE", C_TEXT_LIGHT, C_BOARD, 1);
+    LCD_ShowNum(8, 16, g_score, 1, C_TEXT_LIGHT, C_BOARD, 2);
 
-    LCD_ShowString(140, 6, "BEST", C_TEXT_LIGHT, C_BOARD, 1);
-    LCD_ShowNum(140, 22, g_best, 1, C_TEXT_LIGHT, C_BOARD, 2);
+    LCD_ShowString(140, 0, "BEST", C_TEXT_LIGHT, C_BOARD, 1);
+    LCD_ShowNum(140, 16, g_best, 1, C_TEXT_LIGHT, C_BOARD, 2);
 
-    LCD_ShowString(84, 6, "2048", 0xFFE0, C_BOARD, 1);
+    LCD_ShowString(104, 0, "2048", 0xFFE0, C_BOARD, 1);
 }
 
 static void draw_footer(void)
