@@ -253,7 +253,7 @@ void             LCD_TouchGetCal(lcd_touch_cal_t *cal);
 void             LCD_TouchSetCal(const lcd_touch_cal_t *cal);
 ```
 
-`LCD_TouchCalibrate()` 阻塞执行：依次画 5 个十字，等点击（20 ms 消抖 + 30 ms 稳定延时），算完把 4 个参数显示 8 秒并返回。失败时保留原参数。
+`LCD_TouchCalibrate()` 阻塞执行：依次画 5 个十字，等点击（20 ms 消抖 + 30 ms 稳定延时），算完显示4 个参数。
 
 示例程序里给了三种进校准的方式：上电按住屏幕、画布上按住不动 3 秒、点 CAL 按钮。
 
