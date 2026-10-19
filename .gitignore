@@ -1,0 +1,36 @@
+# .gitignore for a Keil MDK / EIDE STM32 project
+
+# build outputs
+build/
+Objects/
+Listings/
+Output/
+*.o
+*.d
+*.axf
+*.elf
+*.hex
+*.bin
+*.map
+*.lst
+*.crf
+*.dep
+*.lnp
+*.sct
+*.htm
+*.build_log.htm
+*.uvguix.*
+*.scvd
+
+# IDE / editor
+.vscode/
+.idea/
+*.uvoptx
+*.uvprojx
+RTE/
+.mxproject
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store
