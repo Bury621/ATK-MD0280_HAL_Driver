@@ -102,35 +102,28 @@ static void lcd_write_reg(uint16_t cmd, const uint8_t *dat, uint16_t len)
 static void lcd_hw_init(void)
 {
     GPIO_InitTypeDef gpio_init_struct = {0};
+    static const struct
+    {
+        GPIO_TypeDef *port;
+        uint32_t      pins;
+    } pin_groups[] = { LCD_FSMC_PIN_GROUPS };
+    uint32_t i;
 
-    /* Clocks */
-    __HAL_RCC_GPIOD_CLK_ENABLE();
-    __HAL_RCC_GPIOE_CLK_ENABLE();
-    __HAL_RCC_GPIOG_CLK_ENABLE();
-    __HAL_RCC_GPIOB_CLK_ENABLE();
+    /* 打开 FSMC 和所有用到的 GPIO 时钟（端口列表在 lcd.h 里） */
+    LCD_GPIO_CLK_ENABLE();
 
-    /* FSMC data/control pins, alternate function push-pull */
+    /* 数据/控制脚全部配成复用推挽 */
     gpio_init_struct.Mode  = GPIO_MODE_AF_PP;
     gpio_init_struct.Pull  = GPIO_NOPULL;
     gpio_init_struct.Speed = GPIO_SPEED_FREQ_HIGH;
 
-    /* PD0, PD1, PD4, PD5, PD8, PD9, PD10, PD14, PD15 */
-    gpio_init_struct.Pin = GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_4 | GPIO_PIN_5 |
-                           GPIO_PIN_8 | GPIO_PIN_9 | GPIO_PIN_10 |
-                           GPIO_PIN_14 | GPIO_PIN_15;
-    HAL_GPIO_Init(GPIOD, &gpio_init_struct);
+    for (i = 0; i < (sizeof(pin_groups) / sizeof(pin_groups[0])); i++)
+    {
+        gpio_init_struct.Pin = pin_groups[i].pins;
+        HAL_GPIO_Init(pin_groups[i].port, &gpio_init_struct);
+    }
 
-    /* PE7 .. PE15 */
-    gpio_init_struct.Pin = GPIO_PIN_7 | GPIO_PIN_8 | GPIO_PIN_9 | GPIO_PIN_10 |
-                           GPIO_PIN_11 | GPIO_PIN_12 | GPIO_PIN_13 |
-                           GPIO_PIN_14 | GPIO_PIN_15;
-    HAL_GPIO_Init(GPIOE, &gpio_init_struct);
-
-    /* PG0 = A10 (RS), PG12 = NE4 (CS) */
-    gpio_init_struct.Pin = GPIO_PIN_0 | GPIO_PIN_12;
-    HAL_GPIO_Init(GPIOG, &gpio_init_struct);
-
-    /* Backlight */
+    /* 背光脚：普通推挽输出，先关掉 */
     gpio_init_struct.Mode  = GPIO_MODE_OUTPUT_PP;
     gpio_init_struct.Pull  = GPIO_NOPULL;
     gpio_init_struct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -141,27 +134,32 @@ static void lcd_hw_init(void)
 
 static void lcd_fsmc_init(void)
 {
-    /* FSMC clock (HCLK) */
+    /* 每个 NE 对应一组 BCR/BTR/BWTR，寄存器索引 = (NE - 1) * 2 */
+    const uint32_t bcr_index = ((uint32_t)LCD_FSMC_NE - 1UL) * 2UL;
+
+    /* FSMC 时钟（HCLK） */
     RCC->AHBENR |= RCC_AHBENR_FSMCEN;
     (void)RCC->AHBENR;
 
-    /* Bank1 / NE4: 16-bit SRAM, write enabled, separate read and write timing */
-    FSMC_Bank1->BTCR[6] = 0x00000000U;                                  /* BCR4: disabled */
+    /* 先关闭 bank，再写时序，最后使能 */
+    FSMC_Bank1->BTCR[bcr_index] = 0x00000000U;
 
-    FSMC_Bank1->BTCR[7] = (uint32_t)LCD_READ_ADDSET                     /* BTR4: read timing  */
-                        | ((uint32_t)LCD_READ_DATAST << 8)
-                        | (0UL << 28);                                  /* access mode A      */
+    /* 读时序：16 位 SRAM，访问模式 A */
+    FSMC_Bank1->BTCR[bcr_index + 1U] = (uint32_t)LCD_READ_ADDSET
+                                     | ((uint32_t)LCD_READ_DATAST << 8)
+                                     | (0UL << 28);
 
-    /* BWTR4 sits at 0x104 + 3 * 8 = 0x11C. CMSIS declares BWTR[] as a plain
-     * uint32_t array (stride 4), so every other slot is reserved: index 6. */
-    FSMC_Bank1E->BWTR[6] = (uint32_t)LCD_WRITE_ADDSET                   /* BWTR4: write timing */
-                         | ((uint32_t)LCD_WRITE_DATAST << 8)
-                         | (0UL << 28);                                 /* access mode A       */
+    /* 写时序：BWTR 数组步长是 4，但每个 bank 实际占 8 字节，
+     * 所以索引同样是 (NE - 1) * 2。 */
+    FSMC_Bank1E->BWTR[bcr_index] = (uint32_t)LCD_WRITE_ADDSET
+                                 | ((uint32_t)LCD_WRITE_DATAST << 8)
+                                 | (0UL << 28);
 
-    FSMC_Bank1->BTCR[6] = FSMC_BCRx_MBKEN                               /* BCR4: enable bank   */
-                        | FSMC_BCRx_MWID_0                              /* 16-bit data bus     */
-                        | FSMC_BCRx_WREN
-                        | FSMC_BCRx_EXTMOD;
+    /* 使能 bank：16 位总线 + 写使能 + 独立读写时序 */
+    FSMC_Bank1->BTCR[bcr_index] = FSMC_BCRx_MBKEN
+                                | FSMC_BCRx_MWID_0
+                                | FSMC_BCRx_WREN
+                                | FSMC_BCRx_EXTMOD;
 }
 
 /*==============================================================================
@@ -700,17 +698,7 @@ void LCD_Test(void)
  *============================================================================*/
 #if (LCD_USE_TOUCH != 0)
 
-#define LCD_TOUCH_PEN_PORT      GPIOF
-#define LCD_TOUCH_PEN_PIN       GPIO_PIN_10
-#define LCD_TOUCH_TCS_PORT      GPIOF
-#define LCD_TOUCH_TCS_PIN       GPIO_PIN_11
-#define LCD_TOUCH_CLK_PORT      GPIOB
-#define LCD_TOUCH_CLK_PIN       GPIO_PIN_1
-#define LCD_TOUCH_MOSI_PORT     GPIOF
-#define LCD_TOUCH_MOSI_PIN      GPIO_PIN_9
-#define LCD_TOUCH_MISO_PORT     GPIOB
-#define LCD_TOUCH_MISO_PIN      GPIO_PIN_2
-
+/* 引脚定义在 lcd.h 的 LCD_TOUCH_*_PORT / _PIN 里 */
 #define LCD_TOUCH_PEN()         HAL_GPIO_ReadPin(LCD_TOUCH_PEN_PORT, LCD_TOUCH_PEN_PIN)
 
 #define LCD_TOUCH_TCS(x)        HAL_GPIO_WritePin(LCD_TOUCH_TCS_PORT, LCD_TOUCH_TCS_PIN, \
@@ -760,8 +748,7 @@ void LCD_TouchHwInit(void)
 {
     GPIO_InitTypeDef gpio_init_struct = {0};
 
-    __HAL_RCC_GPIOB_CLK_ENABLE();
-    __HAL_RCC_GPIOF_CLK_ENABLE();
+    LCD_TOUCH_GPIO_CLK_ENABLE();
 
     gpio_init_struct.Pin   = LCD_TOUCH_MISO_PIN;
     gpio_init_struct.Mode  = GPIO_MODE_INPUT;

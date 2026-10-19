@@ -36,33 +36,74 @@ extern "C" {
 #endif
 
 /*==============================================================================
- * User configuration
+ * 1. 面板与总线配置（换板子/换芯片主要改这一段）
  *============================================================================*/
 
-/* Panel resolution in direction 0 (portrait) */
+/* 面板分辨率（0° 方向） */
 #define LCD_PANEL_WIDTH             240
 #define LCD_PANEL_HEIGHT            320
 
-/* Backlight pin */
-#define LCD_BL_PORT                 GPIOB
-#define LCD_BL_PIN                  GPIO_PIN_0
+/* 用哪一路 FSMC 片选：1..4，对应 NE1..NE4
+ * NE1 = 0x60000000, NE2 = 0x64000000, NE3 = 0x68000000, NE4 = 0x6C000000 */
+#define LCD_FSMC_NE                 4U
 
-/* FSMC address of the panel: Bank1 NE4 = 0x6C000000, RS on address line A10.
- * Command address = base + ((1 << 10) - 1) << 1
- * Data    address = base +  (1 << 10)      << 1
- * Change these two lines only if your board wires RS to another address line. */
-#define LCD_FSMC_BASE               0x6C000000UL
+/* RS(命令/数据选择) 接在 FSMC 的哪根地址线上，A10 就是 10
+ * 注意：改了这个，LCD_FSMC_PIN_GROUPS 里对应的地址线引脚也要改 */
 #define LCD_FSMC_RS_BIT             10U
 
-/* FSMC timing, unit = HCLK (72 MHz -> 13.9 ns).
- * Read needs a long data phase (ID / GRAM read are slow on these panels).
- * Write data phase: (DATAST + 1) HCLK, plus 1 HCLK address setup.
- * These panels need tWC >= 66 ns, so 3 keeps the write cycle around 70 ns.
- * If the display is unstable, increase LCD_WRITE_DATAST first. */
+/* 片选基地址，由 NE 自动算出，不用改 */
+#define LCD_FSMC_BASE               (0x60000000UL + (((uint32_t)LCD_FSMC_NE - 1UL) * 0x04000000UL))
+
+/* FSMC 时序，单位 = HCLK（72 MHz 时 1 HCLK = 13.9 ns）
+ * 读：ID/GRAM 读很慢，数据相位给足
+ * 写：这代面板 tWC >= 66 ns，(DATAST+1) 个 HCLK + 1 个地址建立周期，
+ *     72 MHz 下 DATAST=3 约 70 ns。屏幕不稳定时优先加大 LCD_WRITE_DATAST。 */
 #define LCD_READ_ADDSET             0U
 #define LCD_READ_DATAST             15U
 #define LCD_WRITE_ADDSET            0U
 #define LCD_WRITE_DATAST            3U
+
+/* 背光引脚 */
+#define LCD_BL_PORT                 GPIOB
+#define LCD_BL_PIN                  GPIO_PIN_0
+
+/* 需要打开时钟的 GPIO 端口（按实际用到的端口增删） */
+#define LCD_GPIO_CLK_ENABLE()       do {          \
+                                        __HAL_RCC_GPIOD_CLK_ENABLE(); \
+                                        __HAL_RCC_GPIOE_CLK_ENABLE(); \
+                                        __HAL_RCC_GPIOG_CLK_ENABLE(); \
+                                        __HAL_RCC_GPIOB_CLK_ENABLE(); \
+                                    } while (0)
+
+/* FSMC 用到的全部引脚：{端口, 引脚掩码}
+ * 正点原子 F103ZE 接法：D0=PD14 D1=PD15 D2=PD0 D3=PD1 D4~D12=PE7~PE15
+ *                       D13=PD8 D14=PD9 D15=PD10
+ *                       CS=PG12(NE4) RS=PG0(A10) RD=PD4 WR=PD5
+ * 换板子时把下面几行改成你的接线即可，驱动其余部分不用动。 */
+#define LCD_FSMC_PIN_GROUPS                                                   \
+    { GPIOD, GPIO_PIN_0  | GPIO_PIN_1  | GPIO_PIN_4  | GPIO_PIN_5  |         \
+             GPIO_PIN_8  | GPIO_PIN_9  | GPIO_PIN_10 | GPIO_PIN_14 |         \
+             GPIO_PIN_15 },                                                   \
+    { GPIOE, GPIO_PIN_7  | GPIO_PIN_8  | GPIO_PIN_9  | GPIO_PIN_10 |         \
+             GPIO_PIN_11 | GPIO_PIN_12 | GPIO_PIN_13 | GPIO_PIN_14 |         \
+             GPIO_PIN_15 },                                                   \
+    { GPIOG, GPIO_PIN_0  | GPIO_PIN_12 }
+
+/* 触摸（XPT2046）引脚，不用触摸可以不看 */
+#define LCD_TOUCH_PEN_PORT          GPIOF
+#define LCD_TOUCH_PEN_PIN           GPIO_PIN_10
+#define LCD_TOUCH_TCS_PORT          GPIOF
+#define LCD_TOUCH_TCS_PIN           GPIO_PIN_11
+#define LCD_TOUCH_CLK_PORT          GPIOB
+#define LCD_TOUCH_CLK_PIN           GPIO_PIN_1
+#define LCD_TOUCH_MOSI_PORT         GPIOF
+#define LCD_TOUCH_MOSI_PIN          GPIO_PIN_9
+#define LCD_TOUCH_MISO_PORT         GPIOB
+#define LCD_TOUCH_MISO_PIN          GPIO_PIN_2
+#define LCD_TOUCH_GPIO_CLK_ENABLE() do {          \
+                                        __HAL_RCC_GPIOB_CLK_ENABLE(); \
+                                        __HAL_RCC_GPIOF_CLK_ENABLE(); \
+                                    } while (0)
 
 /* Set to 1 to compile the resistive touch driver (XPT2046).
  * With touch enabled the panel starts with the LCD_TOUCH_DEF_* parameters
