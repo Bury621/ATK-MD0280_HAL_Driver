@@ -63,6 +63,8 @@ typedef struct
     uint8_t  tr;
     uint8_t  tc;
     uint16_t value;
+    uint16_t px;        /* 上一帧画到的位置，用于擦除 */
+    uint16_t py;
 } anim_tile_t;
 
 /* ---------------- 游戏状态 ---------------- */
@@ -224,7 +226,49 @@ static void draw_overlay(void)
 /*==============================================================================
  * 动画
  *============================================================================*/
-/* 按缓出曲线把方块从起点滑到终点，期间不画数字，保证帧率 */
+/* 用“棋盘底色 + 空格子色”重画一块区域。
+ * 只擦移动方块走过的位置，不整屏清，避免闪屏。 */
+static void paint_bg_region(uint16_t x, uint16_t y, uint16_t w, uint16_t h)
+{
+    uint16_t x2 = (uint16_t)(x + w);
+    uint16_t y2 = (uint16_t)(y + h);
+    uint8_t  r;
+    uint8_t  c;
+
+    LCD_Fill(x, y, w, h, C_BOARD);
+
+    for (r = 0; r < GRID_SIZE; r++)
+    {
+        for (c = 0; c < GRID_SIZE; c++)
+        {
+            uint16_t cx  = cell_x(c);
+            uint16_t cy  = cell_y(r);
+            uint16_t ix;
+            uint16_t iy;
+            uint16_t ix2;
+            uint16_t iy2;
+
+            if ((cx >= x2) || ((uint16_t)(cx + CELL_SIZE) <= x) ||
+                (cy >= y2) || ((uint16_t)(cy + CELL_SIZE) <= y))
+            {
+                continue;
+            }
+
+            ix  = (cx > x) ? cx : x;
+            iy  = (cy > y) ? cy : y;
+            ix2 = ((uint16_t)(cx + CELL_SIZE) < x2) ? (uint16_t)(cx + CELL_SIZE) : x2;
+            iy2 = ((uint16_t)(cy + CELL_SIZE) < y2) ? (uint16_t)(cy + CELL_SIZE) : y2;
+
+            if ((ix2 > ix) && (iy2 > iy))
+            {
+                LCD_Fill(ix, iy, (uint16_t)(ix2 - ix), (uint16_t)(iy2 - iy), C_EMPTY);
+            }
+        }
+    }
+}
+
+/* 按缓出曲线把方块从起点滑到终点，期间不画数字，保证帧率。
+ * 每帧只擦掉移动方块上一帧的矩形，静止的方块完全不重绘。 */
 static void animate_slide(void)
 {
     uint32_t start;
@@ -236,6 +280,13 @@ static void animate_slide(void)
     if (g_anim_count == 0U)
     {
         return;
+    }
+
+    /* 记录初始位置 */
+    for (i = 0; i < g_anim_count; i++)
+    {
+        g_anim[i].px = cell_x(g_anim[i].fc);
+        g_anim[i].py = cell_y(g_anim[i].fr);
     }
 
     start = HAL_GetTick();
@@ -253,19 +304,56 @@ static void animate_slide(void)
         /* ease-out：e = 100 - (100 - u)^2 / 100 */
         e = 100U - (((100U - u) * (100U - u)) / 100U);
 
-        LCD_Fill(0, (uint16_t)(BOARD_Y - CELL_GAP), LCD_PANEL_WIDTH, BOARD_H, C_BOARD);
-
+        /* 1. 先擦掉所有移动方块上一帧的位置 */
         for (i = 0; i < g_anim_count; i++)
         {
-            int32_t x0 = (int32_t)cell_x(g_anim[i].fc);
-            int32_t y0 = (int32_t)cell_y(g_anim[i].fr);
-            int32_t x1 = (int32_t)cell_x(g_anim[i].tc);
-            int32_t y1 = (int32_t)cell_y(g_anim[i].tr);
-            int32_t x  = x0 + (((x1 - x0) * (int32_t)e) / 100);
-            int32_t y  = y0 + (((y1 - y0) * (int32_t)e) / 100);
+            if ((g_anim[i].fr == g_anim[i].tr) && (g_anim[i].fc == g_anim[i].tc))
+            {
+                continue;               /* 不动的方块不用管 */
+            }
+
+            paint_bg_region(g_anim[i].px, g_anim[i].py, CELL_SIZE, CELL_SIZE);
+        }
+
+        /* 2. 静止的方块补画一遍（擦除时可能被误伤） */
+        for (i = 0; i < g_anim_count; i++)
+        {
+            if ((g_anim[i].fr != g_anim[i].tr) || (g_anim[i].fc != g_anim[i].tc))
+            {
+                continue;
+            }
+
+            LCD_Fill(cell_x(g_anim[i].fc), cell_y(g_anim[i].fr),
+                     CELL_SIZE, CELL_SIZE, tile_color(g_anim[i].value));
+        }
+
+        /* 3. 移动的方块画到新位置 */
+        for (i = 0; i < g_anim_count; i++)
+        {
+            int32_t x0;
+            int32_t y0;
+            int32_t x1;
+            int32_t y1;
+            int32_t x;
+            int32_t y;
+
+            if ((g_anim[i].fr == g_anim[i].tr) && (g_anim[i].fc == g_anim[i].tc))
+            {
+                continue;
+            }
+
+            x0 = (int32_t)cell_x(g_anim[i].fc);
+            y0 = (int32_t)cell_y(g_anim[i].fr);
+            x1 = (int32_t)cell_x(g_anim[i].tc);
+            y1 = (int32_t)cell_y(g_anim[i].tr);
+            x  = x0 + (((x1 - x0) * (int32_t)e) / 100);
+            y  = y0 + (((y1 - y0) * (int32_t)e) / 100);
 
             LCD_Fill((uint16_t)x, (uint16_t)y, CELL_SIZE, CELL_SIZE,
                      tile_color(g_anim[i].value));
+
+            g_anim[i].px = (uint16_t)x;
+            g_anim[i].py = (uint16_t)y;
         }
 
         if (u >= 100U)
