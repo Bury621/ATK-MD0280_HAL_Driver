@@ -1160,8 +1160,8 @@ lcd_touch_cal_t LCD_TouchCalibrate(void)
     /* 把结果打印在屏上，方便抄回 lcd.h 的 LCD_TOUCH_DEF_* */
     LCD_TouchShowCal();
 
-    HAL_Delay(8000);
-    LCD_Clear(LCD_WHITE);
+    // HAL_Delay(8000);
+    // LCD_Clear(LCD_WHITE);
 
     LCD_TouchGetCal(&cal);
     return cal;

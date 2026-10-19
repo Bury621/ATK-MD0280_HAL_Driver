@@ -178,10 +178,11 @@ while (1)
 }
 ```
 
+- `app_2048.c` —— 2048 小游戏，上下左右滑动合并数字
 - `app_draw.c` —— 触摸画板，三种进校准方式
 - `app_demo.c` —— 所有显示 API 依次演示
 
-**两个只能编译一个**，否则 `App_Init` 重复定义。
+**每次只能编译一个**，否则 `App_Init` 重复定义。
 
 ## API 速查
 
@@ -374,6 +375,7 @@ ATK-MD0280/
 ├── lcd.h                 接口、引脚/FSMC 配置、颜色、校准默认参数
 ├── lcd_font.h            8×16 ASCII 字库
 ├── examples/
+│   ├── app_2048.c        2048 小游戏
 │   ├── app_draw.c        触摸画板
 │   ├── app_demo.c        全 API 演示
 │   ├── app.h
