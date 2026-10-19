@@ -253,9 +253,11 @@ void             LCD_TouchGetCal(lcd_touch_cal_t *cal);
 void             LCD_TouchSetCal(const lcd_touch_cal_t *cal);
 ```
 
-`LCD_TouchCalibrate()` 阻塞执行：依次画 5 个十字，等点击（20 ms 消抖 + 30 ms 稳定延时），算完显示4 个参数。
+`LCD_TouchCalibrate()` 阻塞执行：依次画 5 个十字，等点击（20 ms 消抖 + 30 ms 稳定延时），算完显示 4 个参数。
 
 示例程序里给了三种进校准的方式：上电按住屏幕、画布上按住不动 3 秒、点 CAL 按钮。
+
+> 换板子时触摸引脚的改法、控制器兼容性和校准流程，见下面「移植指南 · F. 触摸怎么移植」。
 
 ## 移植指南
 
@@ -350,6 +352,86 @@ FSMC 外设完全一样，只改引脚：
 
 2. **换 SPI 屏**：本驱动是并口版，SPI 型号（ST7735/ST7789 SPI 等）需要另一套驱动。
 
+### F. 触摸（XPT2046）怎么移植
+
+触摸**完全独立于 FSMC**，是纯 GPIO 位操作（软件 SPI），不需要硬件 SPI 外设，所以换板子只需要改 5 个引脚宏。
+
+#### 1. 引脚要求
+
+| 信号 | 方向 | 说明 |
+| --- | --- | --- |
+| PEN | 输入 + 上拉 | 按下为**低电平**，松开为高 |
+| MISO | 输入 + 上拉 | 触摸控制器数据输出 |
+| TCS | 推挽输出 | 片选，低有效 |
+| CLK | 推挽输出 | 软件 SPI 时钟 |
+| MOSI | 推挽输出 | 命令/数据输出 |
+
+模块丝印通常写作 `T_PEN` / `T_CS` / `T_CLK` / `T_MOSI` / `T_MISO`，注意有的板子把 MISO 标成 `T_DO`、MOSI 标成 `T_DIN`。
+
+#### 2. 改 `lcd.h`
+
+```c
+/* 触摸（XPT2046）引脚 */
+#define LCD_TOUCH_PEN_PORT          GPIOF
+#define LCD_TOUCH_PEN_PIN           GPIO_PIN_10
+#define LCD_TOUCH_TCS_PORT          GPIOF
+#define LCD_TOUCH_TCS_PIN           GPIO_PIN_11
+#define LCD_TOUCH_CLK_PORT          GPIOB
+#define LCD_TOUCH_CLK_PIN           GPIO_PIN_1
+#define LCD_TOUCH_MOSI_PORT         GPIOF
+#define LCD_TOUCH_MOSI_PIN          GPIO_PIN_9
+#define LCD_TOUCH_MISO_PORT         GPIOB
+#define LCD_TOUCH_MISO_PIN          GPIO_PIN_2
+
+/* 这几个端口打开时钟 */
+#define LCD_TOUCH_GPIO_CLK_ENABLE() do {          \
+                                        __HAL_RCC_GPIOB_CLK_ENABLE(); \
+                                        __HAL_RCC_GPIOF_CLK_ENABLE(); \
+                                    } while (0)
+```
+
+改完这几行就够了，`lcd.c` 里的 `LCD_TouchHwInit()` 会按宏去配方向和上拉。
+
+#### 3. 需要额外注意的三点
+
+**（1）主频和延时**
+
+软件 SPI 的延时在 `lcd_udelay()` 里，用 `us * 12` 次空循环近似 72 MHz 下的 1 µs：
+
+```c
+static void lcd_udelay(uint32_t us)
+{
+    uint32_t n = us * 12U;
+    while (n--) { __NOP(); }
+}
+```
+
+换主频（比如 48 MHz / 168 MHz）后这个系数要相应调整。XPT2046 的 SPI 时钟上限是 2 MHz，**慢一点不会错，快过头才会读错**，所以宁可把系数调大。
+
+**（2）换板后必须重新校准**
+
+`LCD_TOUCH_DEF_*` 里是示例面板的实测值，换一块屏（甚至同一批次的另一块）都要重新校准：
+
+```c
+lcd_touch_cal_t cal = LCD_TouchCalibrate();   /* 屏上会显示 4 个新参数 */
+```
+
+把屏上显示的 4 个数填回 `lcd.h` 的 `LCD_TOUCH_DEF_*`，以后开机就不用再校准了。
+
+**（3）确认控制器兼容**
+
+这个驱动按 **XPT2046 / HR2046** 的协议写（命令字节 `0xD0` 读 X、`0x90` 读 Y，12 位差分）。如果换成：
+
+- **电容屏**（FT6236、GT911 等，I2C 接口）—— 不能用，需要另写驱动；
+- **其它电阻屏控制器**（如 ADS7846，协议基本兼容；TSC2046 也兼容）—— 通常直接能用；
+- **协议不同的芯片** —— 改 `LCD_TOUCH_CMD_X` / `LCD_TOUCH_CMD_Y` 和 `lcd_touch_spi_read()` 的时序。
+
+#### 4. 不用触摸
+
+把 `lcd.h` 里的 `LCD_USE_TOUCH` 设成 0，触摸相关代码完全不参与编译，也不会占用那 5 个引脚。
+
+如果只想把触摸当"按键"用（判断有没有按下，不需要坐标），开着 `LCD_USE_TOUCH` 调 `LCD_TouchIsDown()` 即可，它只读 PEN 脚，不依赖校准。
+
 ### 移植检查清单
 
 - [ ] `LCD_FSMC_NE` 和 CS 引脚对应
@@ -357,7 +439,10 @@ FSMC 外设完全一样，只改引脚：
 - [ ] `LCD_FSMC_PIN_GROUPS` 覆盖全部数据/控制脚
 - [ ] `LCD_GPIO_CLK_ENABLE()` 打开了所有用到的端口
 - [ ] 时序按主频重算，写周期满足 ≥ 66 ns
-- [ ] 触摸引脚与 `LCD_TOUCH_*` 一致（不用触摸可关 `LCD_USE_TOUCH`）
+- [ ] 触摸 5 根线与 `LCD_TOUCH_*` 一致，PEN / MISO 配了上拉
+- [ ] `LCD_TOUCH_GPIO_CLK_ENABLE()` 打开了触摸用到的端口
+- [ ] 换板后重新校准，并把新参数填回 `LCD_TOUCH_DEF_*`
+- [ ] 不用触摸就关掉 `LCD_USE_TOUCH`
 - [ ] `LCD_Init()` 在时钟和 GPIO 初始化之后调用
 
 ## 注意事项
