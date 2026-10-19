@@ -44,7 +44,7 @@ void App_Run(void)
 #define MAX_TILES       (GRID_SIZE * GRID_SIZE)
 
 /* ---------------- 动画参数 ---------------- */
-#define ANIM_MS         130U        /* 滑行时长 */
+#define ANIM_MS         200U        /* 滑行时长 */
 #define POP_STEP_MS     22U         /* 新方块每一帧停留 */
 #define MERGE_FLASH_MS  45U         /* 合并闪光时长 */
 
@@ -162,17 +162,47 @@ static void draw_num_centered(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
 /*==============================================================================
  * 绘制
  *============================================================================*/
+/* 只刷新一个数字区域，避免整块重画顶部栏造成闪动 */
+static void draw_value(uint16_t x, uint32_t value)
+{
+    uint8_t  digits = 1;
+    uint32_t t = value;
+
+    while (t >= 10U)
+    {
+        t /= 10U;
+        digits++;
+    }
+
+    if (digits > 5U)
+    {
+        digits = 5U;
+    }
+
+    LCD_Fill(x, 16, 80, 32, C_BOARD);
+    LCD_ShowNum(x, 16, value, digits, C_TEXT_LIGHT, C_BOARD, 2);
+}
+
+static void draw_score(void)
+{
+    draw_value(8, g_score);
+}
+
+static void draw_best(void)
+{
+    draw_value(140, g_best);
+}
+
 static void draw_header(void)
 {
     LCD_Fill(0, 0, LCD_PANEL_WIDTH, HEADER_H, C_BOARD);
 
     LCD_ShowString(8, 0, "SCORE", C_TEXT_LIGHT, C_BOARD, 1);
-    LCD_ShowNum(8, 16, g_score, 1, C_TEXT_LIGHT, C_BOARD, 2);
-
     LCD_ShowString(140, 0, "BEST", C_TEXT_LIGHT, C_BOARD, 1);
-    LCD_ShowNum(140, 16, g_best, 1, C_TEXT_LIGHT, C_BOARD, 2);
-
     LCD_ShowString(104, 0, "2048", 0xFFE0, C_BOARD, 1);
+
+    draw_score();
+    draw_best();
 }
 
 static void draw_footer(void)
@@ -226,17 +256,17 @@ static void draw_overlay(void)
 /*==============================================================================
  * 动画
  *============================================================================*/
-/* 用“棋盘底色 + 空格子色”重画一块区域。
- * 只擦移动方块走过的位置，不整屏清，避免闪屏。 */
+/* 重画一块背景区域：格子部分涂空格子色，间隙条涂棋盘底色。
+ * 分成“格子 / 间隙”两类分别填，避免先整块刷深色再补浅色造成的闪动。 */
 static void paint_bg_region(uint16_t x, uint16_t y, uint16_t w, uint16_t h)
 {
     uint16_t x2 = (uint16_t)(x + w);
     uint16_t y2 = (uint16_t)(y + h);
     uint8_t  r;
     uint8_t  c;
+    uint8_t  i;
 
-    LCD_Fill(x, y, w, h, C_BOARD);
-
+    /* 1. 与区域相交的格子：空格子色 */
     for (r = 0; r < GRID_SIZE; r++)
     {
         for (c = 0; c < GRID_SIZE; c++)
@@ -265,10 +295,48 @@ static void paint_bg_region(uint16_t x, uint16_t y, uint16_t w, uint16_t h)
             }
         }
     }
+
+    /* 2. 与区域相交的竖直间隙条：棋盘底色 */
+    for (i = 0; i < (GRID_SIZE - 1U); i++)
+    {
+        uint16_t gx  = (uint16_t)(cell_x((uint8_t)(i + 1U)) - CELL_GAP);
+        uint16_t gx2 = (uint16_t)(gx + CELL_GAP);
+        uint16_t ax  = (gx > x) ? gx : x;
+        uint16_t ax2 = (gx2 < x2) ? gx2 : x2;
+
+        if (ax2 > ax)
+        {
+            LCD_Fill(ax, y, (uint16_t)(ax2 - ax), h, C_BOARD);
+        }
+    }
+
+    /* 3. 与区域相交的水平间隙条：棋盘底色 */
+    for (i = 0; i < (GRID_SIZE - 1U); i++)
+    {
+        uint16_t gy  = (uint16_t)(cell_y((uint8_t)(i + 1U)) - CELL_GAP);
+        uint16_t gy2 = (uint16_t)(gy + CELL_GAP);
+        uint16_t ay  = (gy > y) ? gy : y;
+        uint16_t ay2 = (gy2 < y2) ? gy2 : y2;
+
+        if (ay2 > ay)
+        {
+            LCD_Fill(x, ay, w, (uint16_t)(ay2 - ay), C_BOARD);
+        }
+    }
 }
 
-/* 按缓出曲线把方块从起点滑到终点，期间不画数字，保证帧率。
- * 每帧只擦掉移动方块上一帧的矩形，静止的方块完全不重绘。 */
+/* 在任意位置画一个带数字的方块（动画期间也要画数字，否则会闪） */
+static void draw_tile_at(uint16_t x, uint16_t y, uint16_t v)
+{
+    uint16_t bg = tile_color(v);
+    uint16_t fg = (v <= 4U) ? C_TEXT_DARK : C_TEXT_LIGHT;
+
+    LCD_Fill(x, y, CELL_SIZE, CELL_SIZE, bg);
+    draw_num_centered(x, y, CELL_SIZE, CELL_SIZE, v, fg, bg);
+}
+
+/* 按缓出曲线把方块从起点滑到终点。
+ * 每帧只擦掉移动方块上一帧的矩形，静止方块原位重画（含数字）。 */
 static void animate_slide(void)
 {
     uint32_t start;
@@ -315,7 +383,7 @@ static void animate_slide(void)
             paint_bg_region(g_anim[i].px, g_anim[i].py, CELL_SIZE, CELL_SIZE);
         }
 
-        /* 2. 静止的方块补画一遍（擦除时可能被误伤） */
+        /* 2. 静止的方块原位重画（带数字，防止被擦除误伤） */
         for (i = 0; i < g_anim_count; i++)
         {
             if ((g_anim[i].fr != g_anim[i].tr) || (g_anim[i].fc != g_anim[i].tc))
@@ -323,8 +391,7 @@ static void animate_slide(void)
                 continue;
             }
 
-            LCD_Fill(cell_x(g_anim[i].fc), cell_y(g_anim[i].fr),
-                     CELL_SIZE, CELL_SIZE, tile_color(g_anim[i].value));
+            draw_tile_at(cell_x(g_anim[i].fc), cell_y(g_anim[i].fr), g_anim[i].value);
         }
 
         /* 3. 移动的方块画到新位置 */
@@ -349,8 +416,7 @@ static void animate_slide(void)
             x  = x0 + (((x1 - x0) * (int32_t)e) / 100);
             y  = y0 + (((y1 - y0) * (int32_t)e) / 100);
 
-            LCD_Fill((uint16_t)x, (uint16_t)y, CELL_SIZE, CELL_SIZE,
-                     tile_color(g_anim[i].value));
+            draw_tile_at((uint16_t)x, (uint16_t)y, g_anim[i].value);
 
             g_anim[i].px = (uint16_t)x;
             g_anim[i].py = (uint16_t)y;
@@ -685,18 +751,18 @@ static void do_move(uint8_t dir)
         return;
     }
 
-    animate_slide();        /* 1. 方块滑行 */
-    draw_board();           /* 2. 定格并画出数字 */
-    flash_merged();         /* 3. 合并闪光 */
+    animate_slide();        /* 1. 方块滑行，结束时已停在目标格 */
+    flash_merged();         /* 2. 合并闪光，同时把合并格改成新数字 */
 
-    spawn_tile(&nr, &nc);   /* 4. 新方块弹出 */
+    spawn_tile(&nr, &nc);   /* 3. 新方块弹出 */
     pop_cell(nr, nc);
 
     if (g_score > g_best)
     {
         g_best = g_score;
+        draw_best();
     }
-    draw_header();          /* 5. 刷新分数 */
+    draw_score();           /* 5. 只刷新分数数字 */
 
     if (board_full() != 0U)
     {
